@@ -1,12 +1,12 @@
 # Introduction
 
-**nexu** (next to you) is an open-source desktop client (Electron) that connects **OpenClaw 🦞** agents to Feishu, Slack, Discord, and other IM channels.
+**nene** is an open-source desktop client for local-first AI agents that connects **OpenClaw 🦞** agents to Feishu, Slack, Discord, and other chat channels.
 
-It offers graphical setup, built-in Feishu Skills, multi-model support, and BYOK.
+It offers graphical setup, built-in skills, multi-model support, and BYOK.
 
 Configuration and runtime state stay primarily on your machine.
 
-![nexu client](/assets/nexu-home.webp)
+![nene desktop screenshot](/assets/nexu-home.webp)
 
 ## Get started
 

@@ -1,7 +1,7 @@
 {
   "name": "nene-desktop",
   "private": true,
-  "description": "Open-source desktop client for nene, built on the nexu monorepo baseline.",
+  "description": "Open-source desktop client for nene, built on an upstream-compatible monorepo baseline.",
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
