@@ -1,0 +1,180 @@
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { app } from "electron";
+import { getDesktopNexuHomeDir } from "../shared/desktop-paths";
+import { resolveRuntimePlatform } from "./platforms/platform-resolver";
+
+function safeWrite(stream: NodeJS.WriteStream, message: string): void {
+  if (stream.destroyed || !stream.writable) {
+    return;
+  }
+
+  try {
+    stream.write(message);
+  } catch (error) {
+    const errorCode =
+      error instanceof Error && "code" in error ? String(error.code) : null;
+    if (errorCode === "EIO" || errorCode === "EPIPE") {
+      return;
+    }
+    throw error;
+  }
+}
+
+function readConfiguredHomePath(): string | null {
+  return process.env.NEXU_HOME ?? process.env.NENE_HOME ?? null;
+}
+
+function syncHomeEnv(homePath: string): void {
+  process.env.NEXU_HOME = homePath;
+  process.env.NENE_HOME = homePath;
+}
+
+function loadDesktopDevEnv(): void {
+  const workspaceRoot = process.env.NEXU_WORKSPACE_ROOT;
+
+  if (!workspaceRoot || app.isPackaged) {
+    return;
+  }
+
+  const envPaths = [
+    resolve(workspaceRoot, "apps/controller/.env"),
+    resolve(workspaceRoot, "apps/desktop/.env"),
+  ];
+
+  for (const envPath of envPaths) {
+    if (!existsSync(envPath)) {
+      continue;
+    }
+
+    const source = readFileSync(envPath, "utf8");
+    for (const rawLine of source.split(/\r?\n/u)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) {
+        continue;
+      }
+
+      const separatorIndex = line.indexOf("=");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+
+      const key = line.slice(0, separatorIndex).trim();
+      if (!key || process.env[key] !== undefined) {
+        continue;
+      }
+
+      const rawValue = line.slice(separatorIndex + 1).trim();
+      if (
+        (rawValue.startsWith('"') && rawValue.endsWith('"')) ||
+        (rawValue.startsWith("'") && rawValue.endsWith("'"))
+      ) {
+        process.env[key] = rawValue.slice(1, -1);
+        continue;
+      }
+
+      process.env[key] = rawValue;
+    }
+  }
+}
+
+function configureLocalDevPaths(): void {
+  const runtimeRoot = process.env.NEXU_DESKTOP_RUNTIME_ROOT;
+
+  if (!runtimeRoot || app.isPackaged) {
+    return;
+  }
+
+  const electronRoot = resolve(runtimeRoot, "electron");
+  const userDataPath = resolve(electronRoot, "user-data");
+  const sessionDataPath = resolve(electronRoot, "session-data");
+  const logsPath = resolve(userDataPath, "logs");
+  const configuredHomePath = readConfiguredHomePath();
+  const nexuHomePath = configuredHomePath
+    ? resolve(configuredHomePath)
+    : getDesktopNexuHomeDir(userDataPath);
+
+  mkdirSync(userDataPath, { recursive: true });
+  mkdirSync(sessionDataPath, { recursive: true });
+  mkdirSync(logsPath, { recursive: true });
+  mkdirSync(nexuHomePath, { recursive: true });
+
+  // Preserve the current physical storage strategy while supporting
+  // NENE_HOME as a public alias for NEXU_HOME.
+  syncHomeEnv(nexuHomePath);
+
+  app.setPath("userData", userDataPath);
+  app.setPath("sessionData", sessionDataPath);
+  app.setAppLogsPath(logsPath);
+
+  safeWrite(
+    process.stdout,
+    `[desktop:paths] runtimeRoot=${runtimeRoot} userData=${userDataPath} sessionData=${sessionDataPath} logs=${logsPath} nexuHome=${nexuHomePath}\n`,
+  );
+}
+
+function configurePackagedPaths(): void {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  const appDataPath = app.getPath("appData");
+  const overrideUserDataPath = process.env.NEXU_DESKTOP_USER_DATA_ROOT;
+  const defaultUserDataPath = app.getPath("userData");
+  const runtimePlatform = resolveRuntimePlatform();
+  const legacyWindowsUserDataPath = join(appDataPath, "@nexu", "desktop");
+  const standardWindowsUserDataPath = join(appDataPath, "nexu-desktop");
+  const userDataPath = overrideUserDataPath
+    ? resolve(overrideUserDataPath)
+    : runtimePlatform === "win"
+      ? standardWindowsUserDataPath
+      : join(appDataPath, "@nexu", "desktop");
+  let effectiveUserDataPath = userDataPath;
+
+  if (
+    runtimePlatform === "win" &&
+    !overrideUserDataPath &&
+    userDataPath !== legacyWindowsUserDataPath &&
+    !existsSync(userDataPath) &&
+    existsSync(legacyWindowsUserDataPath)
+  ) {
+    try {
+      renameSync(legacyWindowsUserDataPath, userDataPath);
+    } catch (error) {
+      effectiveUserDataPath = legacyWindowsUserDataPath;
+      safeWrite(
+        process.stdout,
+        `[desktop:paths] legacy userData migration failed; reusing legacy path error=${error instanceof Error ? error.message : String(error)} from=${legacyWindowsUserDataPath} to=${userDataPath}\n`,
+      );
+    }
+  }
+
+  const sessionDataPath = join(effectiveUserDataPath, "session");
+  const logsPath = join(effectiveUserDataPath, "logs");
+  const configuredHomePath = readConfiguredHomePath();
+  const nexuHomePath = configuredHomePath
+    ? resolve(configuredHomePath)
+    : getDesktopNexuHomeDir(effectiveUserDataPath);
+
+  mkdirSync(effectiveUserDataPath, { recursive: true });
+  mkdirSync(sessionDataPath, { recursive: true });
+  mkdirSync(logsPath, { recursive: true });
+  mkdirSync(nexuHomePath, { recursive: true });
+
+  syncHomeEnv(nexuHomePath);
+
+  app.setPath("userData", effectiveUserDataPath);
+  app.setPath("sessionData", sessionDataPath);
+  app.setAppLogsPath(logsPath);
+
+  safeWrite(
+    process.stdout,
+    `[desktop:paths] appData=${appDataPath} defaultUserData=${defaultUserDataPath} overrideUserData=${overrideUserDataPath ?? "<unset>"} userData=${effectiveUserDataPath} sessionData=${sessionDataPath} logs=${logsPath} nexuHome=${nexuHomePath}\n`,
+  );
+}
+
+loadDesktopDevEnv();
+configurePackagedPaths();
+configureLocalDevPaths();
+
+await import("./index");
